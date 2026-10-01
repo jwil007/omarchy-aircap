@@ -8,7 +8,7 @@
 # interleaved with dumpcap's own output ("Packets: N" once per update).
 #
 #   aircap-helper capture IFACE FREQ WIDTH CENTER1 SNAPLEN RESET
-#       take IFACE away from NetworkManager/iwd (and roamctl), switch it to
+#       take IFACE away from NetworkManager or iwd, switch it to
 #       monitor mode on FREQ (MHz) at WIDTH (20/40/80/160/320) centred on
 #       CENTER1, and run dumpcap until stopped; Wi-Fi is restored on exit.
 #       RESET=1 rebinds the driver on the way back (see reset_driver).
@@ -22,7 +22,6 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/bin
 umask 022
 
 RUN_DIR=/run/aircap
-SELF="$(readlink -f "$0")"
 
 log() { echo "aircap: $*" >&2; }
 fail() { log "error=$*"; exit 1; }
@@ -46,16 +45,11 @@ capture_pid() {
   echo "$pid"
 }
 
-# Record who owned the interface, then stop them. roamctl goes first so it
-# doesn't log the disconnect as a failure.
+# Record who owned the interface, then stop them.
 take_over() {
   local iface=$1 reset=$2 state=$RUN_DIR/$1.state nm_state=""
   : >"$state"
   (( reset )) && echo reset >>"$state"
-  if systemctl is-active -q "roamctl@$iface"; then
-    echo roamctl >>"$state"
-    systemctl stop "roamctl@$iface"
-  fi
   command -v nmcli >/dev/null && nm_state=$(nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null)
   if [[ -n $nm_state && $nm_state != *unmanaged* ]]; then
     echo nm >>"$state"
@@ -96,17 +90,6 @@ reset_driver() {
   return 1
 }
 
-# Started detached once the capture has exited: roamctl refuses to start
-# ("no connected ssid") until the station has reassociated.
-cmd_roamctl_after_connect() {
-  local iface=$1
-  for _ in {1..60}; do
-    iw dev "$iface" link 2>/dev/null | grep -q '^Connected' && break
-    sleep 1
-  done
-  systemctl start "roamctl@$iface"
-}
-
 restore() {
   local iface=$1 state=$RUN_DIR/$1.state owners
   log state=restoring
@@ -127,10 +110,6 @@ restore() {
   ip link set dev "$iface" up 2>/dev/null
   grep -qx nm <<<"$owners" && nmcli device set "$iface" managed yes >&2
   grep -qx iwd <<<"$owners" && systemctl start iwd
-  if grep -qx roamctl <<<"$owners"; then
-    systemd-run --quiet --collect --description="aircap: restart roamctl@$iface once connected" \
-      "$SELF" roamctl-after-connect "$iface" >&2 || systemctl start "roamctl@$iface"
-  fi
   rm -f "$state" "$RUN_DIR/$iface.pid"
   log state=restored
 }
@@ -222,13 +201,5 @@ case "${1:-}" in
   stop) (( $# == 2 )) || fail "usage: stop IFACE"; cmd_stop "$2" ;;
   restore) (( $# == 2 )) || fail "usage: restore IFACE"; cmd_restore "$2" ;;
   reset) (( $# == 2 )) || fail "usage: reset IFACE"; cmd_reset "$2" ;;
-  # Internal: only restore() schedules this, via systemd-run. Refuse it
-  # through sudo so the sudoers rule can't be used to start roamctl.
-  roamctl-after-connect)
-    [[ -z ${SUDO_USER:-} ]] || fail "internal command"
-    (( $# == 2 )) || fail "usage: roamctl-after-connect IFACE"
-    check_iface "$2"
-    cmd_roamctl_after_connect "$2"
-    ;;
   *) fail "usage: aircap-helper capture|stop|restore|reset IFACE ..." ;;
 esac

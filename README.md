@@ -81,10 +81,10 @@ Captures are saved to `~/Captures` (configurable) as `aircap_<band>-ch<N>-<width
 Keyboard shortcuts: `Enter` start/stop, `2`/`5`/`6` band, `c` current channel, `h` hide empty channels, `r` rescan, `w` open latest capture, `f` open captures folder.
 
 ## How a capture works
-1. If `roamctl@<iface>` is running, it is stopped. If NetworkManager manages the interface, it is set to unmanaged and its IP addresses are flushed; otherwise iwd is stopped if it's running.
+1. If NetworkManager manages the interface, it is set to unmanaged and its IP addresses are flushed; otherwise iwd is stopped if it's running.
 2. The interface is switched to monitor mode and tuned with `iw dev <iface> set freq <control> <width> <center1>`.
 3. `dumpcap` runs until you stop it.
-4. The interface is switched back to managed mode, its driver is reset (see below), and it is handed back to NetworkManager or iwd. roamctl is restarted once the interface has reconnected.
+4. The interface is switched back to managed mode, its driver is reset (see below), and it is handed back to NetworkManager or iwd.
 
 What was stopped is recorded in `/run/aircap/<iface>.state`, so the restore puts back exactly what was there. If a capture ends without restoring (for example, the shell is killed or the laptop sleeps), the panel shows **Restore Wi-Fi**.
 
