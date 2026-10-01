@@ -38,7 +38,6 @@ Item {
   property var scan: null
   property bool rescanning: rescanProcess.running || rescanSettle.running
   readonly property var scanSummary: Model.scanByChannel(channels, scan)
-  readonly property int scanMax: Model.maxCount(scanSummary)
   readonly property bool ready: dumpcapInstalled && setupCurrent && iface !== ""
   // Left in monitor mode with nothing capturing: a capture died uncleanly.
   readonly property bool stranded: statusKnown && ifaceType === "monitor" && !capturing
@@ -57,6 +56,7 @@ Item {
 
   // Preferences (persisted in stateDir/prefs.json)
   property bool openWhenDone: setting("openInWireshark", true) === true
+  property bool hideEmpty: true
 
   // Capture state. A capture can also be "detached": still running after a
   // shell restart dropped our child process. Those can be stopped but have
@@ -148,7 +148,16 @@ Item {
     if (list.length === 0) return
     if (Model.bandOf(freq) !== b) {
       var preferred = b === "2.4" ? 2437 : b === "5" ? 5180 : 5975 // ch 6 / 36 / 5 (PSC)
-      selectChannel(Model.findChannel(list, preferred) ? preferred : list[0].freq)
+      if (!Model.findChannel(list, preferred)) preferred = list[0].freq
+      // Hiding empty channels: don't land on one; take the busiest instead.
+      if (scan && hideEmpty && !(scanSummary[preferred] && scanSummary[preferred].count > 0)) {
+        var best = 0
+        for (var i = 0; i < list.length; i++) {
+          var n = scanSummary[list[i].freq] ? scanSummary[list[i].freq].count : 0
+          if (n > best) { best = n; preferred = list[i].freq }
+        }
+      }
+      selectChannel(preferred)
     }
   }
 
@@ -169,7 +178,16 @@ Item {
 
   function setOpenWhenDone(on) {
     openWhenDone = on
-    prefsView.setText(JSON.stringify({ openWhenDone: on }) + "\n")
+    savePrefs()
+  }
+
+  function setHideEmpty(on) {
+    hideEmpty = on
+    savePrefs()
+  }
+
+  function savePrefs() {
+    prefsView.setText(JSON.stringify({ openWhenDone: openWhenDone, hideEmpty: hideEmpty }) + "\n")
   }
 
   function start() {
@@ -215,8 +233,17 @@ Item {
 
   // Ask NM for a fresh scan; results land a few seconds later (6 GHz takes
   // longest), so status is re-read once the scan has had time to finish.
+  property double lastRescanAt: 0
+
+  // NM ages BSSes out after a few minutes and rarely does a full scan while
+  // associated, so its cache undercounts; refresh it when the panel opens.
+  function rescanIfStale() {
+    if (Date.now() - lastRescanAt > 30000) rescan()
+  }
+
   function rescan() {
     if (capturing || ifaceType !== "managed" || rescanning) return
+    lastRescanAt = Date.now()
     rescanProcess.command = ["nmcli", "device", "wifi", "rescan", "ifname", iface]
     rescanProcess.running = true
   }
@@ -276,6 +303,7 @@ Item {
     onLoaded: {
       var p = Model.parseStatus(text())
       if (p && typeof p.openWhenDone === "boolean") root.openWhenDone = p.openWhenDone
+      if (p && typeof p.hideEmpty === "boolean") root.hideEmpty = p.hideEmpty
     }
   }
 

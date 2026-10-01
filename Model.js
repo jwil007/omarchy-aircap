@@ -159,49 +159,21 @@ function whenText(epochSeconds) {
 
 // ── Scan data ────────────────────────────────────────────────────────────
 // `scan` is NetworkManager's cached BSS list: {freq, width, signal, bssid,
-// ssid}, signal being NM's 0-100 quality (width 0 = unknown).
+// ssid}. A BSSID counts on its primary channel only: that's where its
+// beacons are, so it's the channel guaranteed to have traffic.
 
-// Inverse of NM's nm_wifi_utils_level_to_quality(): -40 dBm = 100, -100 = 0.
-function qualityToDbm(q) {
-  return Math.round(-40 - (100 - q) * 0.6)
-}
-
-function dbmText(q) {
-  return "≈" + String(qualityToDbm(q)).replace("-", "−")
-}
-
-// Per channel (keyed by freq): BSSIDs whose primary channel it is, plus
-// wider BSSes whose bonded block covers it (their data frames land here,
-// their beacons don't).
+// Per channel (keyed by freq): {count, ssids}.
 function scanByChannel(channels, scan) {
   var out = {}
-  for (var i = 0; i < channels.length; i++) out[channels[i].freq] = { count: 0, overlap: 0, best: -1, ssids: {} }
+  for (var i = 0; i < channels.length; i++) out[channels[i].freq] = { count: 0, ssids: {} }
   if (!scan) return out
   for (var j = 0; j < scan.length; j++) {
-    var b = scan[j]
-    var entry = out[b.freq]
-    if (entry) {
-      entry.count += 1
-      if (b.signal > entry.best) entry.best = b.signal
-      if (b.ssid) entry.ssids[b.ssid] = true
-    }
-    var band = bandOf(b.freq)
-    if (band === "2.4" || !(b.width > 20)) continue
-    var ch = findChannel(channels, b.freq)
-    if (!ch) continue
-    var members = block(band, ch.ch, b.width).members
-    for (var k = 0; k < members.length; k++) {
-      var f = chanFreq(band, members[k])
-      if (f !== b.freq && out[f]) out[f].overlap += 1
-    }
+    var entry = out[scan[j].freq]
+    if (!entry) continue
+    entry.count += 1
+    if (scan[j].ssid) entry.ssids[scan[j].ssid] = true
   }
   return out
-}
-
-function maxCount(summary) {
-  var max = 0
-  for (var f in summary) max = Math.max(max, summary[f].count)
-  return max
 }
 
 function bandCount(summary, band) {
@@ -210,39 +182,31 @@ function bandCount(summary, band) {
   return n
 }
 
-// "9 BSSIDs (8 SSIDs) · +5 bonded across it · best ≈−45 dBm"
+function bssidsText(n) {
+  return n === 1 ? "1 BSSID" : n + " BSSIDs"
+}
+
+// "8 BSSIDs (7 networks) on this channel"
 function scanDetail(summary, freq) {
   var s = summary[freq]
   if (!s) return ""
-  if (s.count === 0 && s.overlap === 0) return "No BSSIDs seen in the last scan"
-  var parts = []
-  if (s.count > 0) {
-    var ssids = Object.keys(s.ssids).length
-    parts.push(s.count + " BSSID" + (s.count === 1 ? "" : "s") + (ssids > 0 && ssids !== s.count ? " (" + ssids + " SSID" + (ssids === 1 ? "" : "s") + ")" : ""))
-  } else {
-    parts.push("No primary BSSIDs")
-  }
-  if (s.overlap > 0) parts.push("+" + s.overlap + " wider BSS" + (s.overlap === 1 ? "" : "es") + " bonded across it")
-  if (s.best >= 0) parts.push("best " + dbmText(s.best) + " dBm")
-  return parts.join(" · ")
+  if (s.count === 0) return "No BSSIDs on this channel in the last scan · capture may be nearly empty"
+  var ssids = Object.keys(s.ssids).length
+  return bssidsText(s.count) + (ssids > 0 && ssids !== s.count ? " (" + ssids + " network" + (ssids === 1 ? "" : "s") + ")" : "") + " on this channel"
 }
 
-// Rows for ChannelDropdown.
-function channelRows(list, summary) {
-  return list.map(function(c) {
-    var s = summary[c.freq] || { count: 0, overlap: 0, best: -1, ssids: {} }
+// Rows for ChannelDropdown. With hideEmpty, channels without BSSIDs are
+// dropped, except `keepFreq` (the current selection).
+function channelRows(list, summary, hideEmpty, keepFreq) {
+  var rows = []
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i]
+    var count = summary[c.freq] ? summary[c.freq].count : 0
+    if (hideEmpty && count === 0 && c.freq !== keepFreq) continue
     var tags = []
     if (c.radar) tags.push("DFS")
     if (isPsc(c)) tags.push("PSC")
-    return {
-      value: String(c.freq),
-      ch: c.ch,
-      freq: c.freq,
-      tags: tags.join(" "),
-      count: s.count,
-      overlap: s.overlap,
-      best: s.best,
-      ssidCount: Object.keys(s.ssids).length
-    }
-  })
+    rows.push({ value: String(c.freq), ch: c.ch, freq: c.freq, tags: tags.join(" "), count: count })
+  }
+  return rows
 }

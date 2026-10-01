@@ -6,14 +6,12 @@ import qs.Ui
 import "Model.js" as Model
 
 // The kit's Dropdown, with channel rows: channel, frequency and DFS/PSC tags
-// on the left; BSSIDs seen on the channel (bar + count, "+N" for wider BSSes
-// bonded across it) and the strongest signal on the right.
+// on the left; how many BSSIDs the last scan saw on it on the right.
 Item {
   id: root
 
   property string value: ""
   property var rows: []          // Model.channelRows()
-  property int maxCount: 0
   property bool hasScan: false
 
   property color foreground: Color.popups.text
@@ -193,7 +191,6 @@ Item {
     property color textColor: root.foreground
     property bool selected: false
     readonly property color dimColor: Qt.darker(textColor, 1.6)
-    readonly property bool empty: !row || (row.count === 0 && row.overlap === 0)
 
     spacing: Style.space(8)
 
@@ -210,50 +207,21 @@ Item {
     Text {
       Layout.fillWidth: true
       textFormat: Text.PlainText
-      text: channelRow.row ? channelRow.row.freq + (channelRow.row.tags ? "  " + channelRow.row.tags : "") : ""
+      text: channelRow.row ? channelRow.row.freq + " MHz" + (channelRow.row.tags ? "  " + channelRow.row.tags : "") : ""
       color: channelRow.dimColor
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
       elide: Text.ElideRight
     }
 
-    // Bar: BSSIDs whose primary channel this is, relative to the busiest.
-    Rectangle {
-      visible: root.hasScan
-      Layout.preferredWidth: Style.space(44)
-      Layout.preferredHeight: Style.space(5)
-      radius: height / 2
-      color: Qt.rgba(channelRow.textColor.r, channelRow.textColor.g, channelRow.textColor.b, 0.12)
-
-      Rectangle {
-        width: channelRow.row && root.maxCount > 0 ? Math.max(channelRow.row.count > 0 ? height : 0, parent.width * channelRow.row.count / root.maxCount) : 0
-        height: parent.height
-        radius: parent.radius
-        color: root.accent
-      }
-    }
-
     Text {
       visible: root.hasScan
-      Layout.preferredWidth: Style.space(44)
       horizontalAlignment: Text.AlignRight
       textFormat: Text.PlainText
-      text: !channelRow.row ? "" : channelRow.empty ? "–"
-        : channelRow.row.count + (channelRow.row.overlap > 0 ? "+" + channelRow.row.overlap : "")
+      text: channelRow.row ? (channelRow.row.count > 0 ? Model.bssidsText(channelRow.row.count) : "no BSSIDs") : ""
       color: channelRow.row && channelRow.row.count > 0 ? channelRow.textColor : channelRow.dimColor
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall
-    }
-
-    Text {
-      visible: root.hasScan
-      Layout.preferredWidth: Style.space(36)
-      horizontalAlignment: Text.AlignRight
-      textFormat: Text.PlainText
-      text: channelRow.row && channelRow.row.best >= 0 ? Model.dbmText(channelRow.row.best) : ""
-      color: channelRow.dimColor
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
     }
   }
 }

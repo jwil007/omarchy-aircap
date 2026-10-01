@@ -66,6 +66,7 @@ Panel {
 
   onOpenedChanged: if (opened) {
     cap.refresh()
+    cap.rescanIfStale()
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -148,6 +149,7 @@ Panel {
         else if (key === "5") cap.selectBand("5")
         else if (key === "6") cap.selectBand("6")
         else if (key === "r") cap.rescan()
+        else if (key === "h") cap.setHideEmpty(!cap.hideEmpty)
       }
 
       Flickable {
@@ -291,7 +293,7 @@ Panel {
 
               PanelSectionHeader {
                 Layout.fillWidth: true
-                text: "CHANNEL" + (cap.scan ? " · " + cap.scan.length + " BSSIDS SEEN" : "")
+                text: "CHANNEL"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
               }
@@ -308,6 +310,17 @@ Panel {
               }
 
               Button {
+                visible: cap.scan !== null
+                text: "Hide empty"
+                iconText: cap.hideEmpty ? "\u{f0132}" : "\u{f0131}"   // checkbox marked / blank
+                tooltipText: "Only list channels where the last scan saw BSSIDs (h)"
+                fontSize: Style.font.caption
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: cap.setHideEmpty(!cap.hideEmpty)
+              }
+
+              Button {
                 visible: cap.current !== null && cap.ifaceType === "managed"
                 text: "Use current"
                 tooltipText: "Capture on the channel you're associated on (c)"
@@ -318,22 +331,27 @@ Panel {
               }
             }
 
-            ButtonGroup {
-              options: cap.bands.map(function(b) {
-                return cap.scan ? { value: b.value, label: b.label + " · " + Model.bandCount(cap.scanSummary, b.value) } : b
-              })
-              value: cap.band
-              focusable: false
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              fontSize: Style.font.bodySmall
-              onChanged: function(v) { cap.selectBand(v) }
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(6)
+
+              ButtonGroup {
+                options: cap.bands.map(function(b) {
+                  return cap.scan ? { value: b.value, label: b.label + " · " + Model.bandCount(cap.scanSummary, b.value), tooltip: Model.bssidsText(Model.bandCount(cap.scanSummary, b.value)) + " in this band" } : b
+                })
+                value: cap.band
+                focusable: false
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.bodySmall
+                onChanged: function(v) { cap.selectBand(v) }
+              }
+
             }
 
             ChannelDropdown {
               width: parent.width
-              rows: Model.channelRows(cap.bandChannelList, cap.scanSummary)
-              maxCount: cap.scanMax
+              rows: Model.channelRows(cap.bandChannelList, cap.scanSummary, cap.scan !== null && cap.hideEmpty, cap.freq)
               hasScan: cap.scan !== null
               value: String(cap.freq)
               foreground: root.foreground
