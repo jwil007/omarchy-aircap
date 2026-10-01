@@ -1,93 +1,132 @@
-# aircap
+# aircap for Omarchy
+An Omarchy bar widget for taking monitor-mode Wi-Fi packet captures. Pick a band, channel, and width, start the capture, watch the packet count, and stop it. The capture is saved as a `.pcapng` file and can open in Wireshark straight away.
 
-An Omarchy bar widget for one-click monitor-mode Wi-Fi captures, in the spirit
-of [Airtool](https://www.intuitibits.com/products/airtool/) on macOS.
+aircap is modeled on [Airtool](https://www.intuitibits.com/products/airtool/) by Intuitibits, a macOS menu bar app that does the same job. It is an independent project, not affiliated with or endorsed by Intuitibits, and it covers only local capture; it has none of Airtool's remote capture support.
 
-- Pick a band, channel, and width (20/40/80/160/320 MHz, 2.4 GHz HT40±). Only
-  channels your regulatory domain enables are listed, and a width is offered
-  only when every 20 MHz subchannel in its block is enabled. DFS and 6 GHz PSC
-  channels are marked.
-- Each channel in the list shows how many BSSIDs the last scan saw on it
-  (primary channel, i.e. where their beacons are), so you can pick one that
-  will actually have traffic. **Hide empty** (`h`, on by default) lists only
-  those channels, and switching bands lands on the busiest one. Band buttons
-  show per-band totals. Opening the panel refreshes the scan if it's more than
-  30 s old; ↻ (`r`) rescans on demand.
-- **Use current** tunes to the channel and width you're associated on.
-- While capturing, the bar shows a live packet count; the panel adds elapsed
-  time, rate, and file size.
-- Captures are saved as `~/Captures/aircap_<band>-ch<N>-<width>MHz_<time>.pcapng`
-  and can open in Wireshark as soon as you stop.
+<p>
+  <img src="preview.png" alt="aircap panel: band and channel picker with BSSID counts per channel, width selector, start button, and recent captures" width="400">
+</p>
 
-| Bar input    | Action                     |
-| ------------ | -------------------------- |
-| Click        | Open the panel             |
-| Right-click  | Start / stop a capture     |
-| Middle-click | Open the latest capture    |
+## Install
+```
+omarchy plugin add https://github.com/jwil007/omarchy-aircap.git
+omarchy plugin enable jwil007.aircap
+```
+Then open the widget and click **Set up monitor-mode capture**, or run:
+```
+~/.config/omarchy/plugins/jwil007.aircap/bin/aircap setup
+```
+Setup opens a terminal and asks for your sudo password once.
 
-Panel keys: `Enter` start/stop · `c` current channel · `2`/`5`/`6` band · `r` rescan · `h` hide empty ·
-`w` open latest capture · `f` open captures folder.
+### Dependencies
+- A Wi-Fi adapter and driver that support monitor mode (`iw list` shows `monitor` under "Supported interface modes"). Developed and tested on a Qualcomm WCN7850 (ath12k).
+- Wireshark (`wireshark-qt`, which includes `dumpcap`). Setup installs it if it's missing.
+- NetworkManager or iwd managing the interface. The per-channel BSSID counts need NetworkManager.
+- `iw`, `iproute2`, `python3`, `sudo`, and systemd, all included in Omarchy.
 
-IPC: `omarchy-shell jwil007.aircap start|stop|toggleCapture|restore|resetRadio|rescan|status`.
+### What setup changes
+- Installs `wireshark-qt` with `omarchy-pkg-add` if it's not installed.
+- Copies `bin/aircap-helper` to `/usr/local/libexec/aircap/aircap-helper`, owned by root.
+- Adds `/etc/sudoers.d/aircap`, which lets members of `wheel` run that one helper as root without a password:
+  ```
+  %wheel ALL=(root) NOPASSWD: /usr/local/libexec/aircap/aircap-helper
+  ```
+  The rule points at the root-owned copy, not the copy in the plugin directory, so editing the plugin can't change what runs as root. The file is checked with `visudo -c` before it's installed.
 
-## How it works
+The helper accepts only these commands, and validates every argument (interface name, frequency in the radio's enabled channel list, width from a fixed set, numeric center frequency and snap length):
 
-Monitor mode needs root, so **Set up** (one-time, in a terminal) installs
-Wireshark if needed, a root-owned copy of `bin/aircap-helper` at
-`/usr/local/libexec/aircap/aircap-helper`, and `/etc/sudoers.d/aircap` allowing
-`%wheel` to run that one helper without a password. The helper takes no paths:
-dumpcap writes the capture to stdout and the unprivileged wrapper redirects it
-into a file you own.
+| command | what it does |
+|---|---|
+| `capture IFACE FREQ WIDTH CENTER1 SNAPLEN RESET` | switch to monitor mode, tune, run `dumpcap`, restore on exit |
+| `stop IFACE` | stop the running capture |
+| `restore IFACE` | put an interface left in monitor mode back to managed mode |
+| `reset IFACE` | unbind and rebind the interface's driver |
 
-For a capture, the helper:
+It takes no file paths. `dumpcap` writes the capture to stdout and the unprivileged wrapper (`bin/aircap`) redirects it into a file you own.
 
-1. stops `roamctl@<iface>` if it's running, and takes the interface away from
-   NetworkManager (`managed no`) or stops iwd;
-2. switches the interface to monitor mode and tunes it with
-   `iw dev <iface> set freq <control> <width> <center1>`;
-3. runs `dumpcap` until you stop it;
-4. switches back to managed mode, resets (unbinds and rebinds) the Wi-Fi
-   driver, and hands the interface back to whoever had it. NetworkManager
-   reconnects, and roamctl restarts once the station has reassociated.
-
-The driver reset is there because on ath12k (WCN7850) leaving monitor mode
-leaves the firmware broken: Wi-Fi reconnects, then 30–60 s later goes deaf
-(beacon loss, then every authentication times out) until a reboot. Rebinding
-the driver reloads the firmware, the same reset a reboot does, in a few
-seconds. Turn off **Reset Wi-Fi driver after capture** if your adapter doesn't
-need it. To recover a deaf radio by hand:
-`omarchy-shell jwil007.aircap resetRadio` (or `bin/aircap reset <iface>`).
-
-Wi-Fi is disconnected for the duration of the capture, as with Airtool. If a
-capture dies without cleaning up (e.g. the machine sleeps mid-capture), the
-panel offers **Restore Wi-Fi**.
-
-When the plugin's helper changes, the panel asks you to run Set up again so the
-installed copy matches.
-
-### Scan data
-
-Counts come from NetworkManager's scan list (`nmcli device wifi list`), which
-needs no root. NetworkManager ages BSSes out after a few minutes and rarely
-does a full scan while associated, hence the rescan when the panel opens.
-There's no scan data while capturing, and the list starts out short right
-after a capture until the rescan finishes.
-
-## Settings
-
-| Setting                       | Default      |
-| ----------------------------- | ------------ |
-| Wireless interface            | first found  |
-| Save captures to              | `~/Captures` |
-| Open in Wireshark when done   | on           |
-| Reset Wi-Fi driver after capture | on        |
-| Snap length (0 = whole frame) | 0            |
+When an update changes the helper, the panel shows **Update capture helper**. Run setup again to install the new copy.
 
 ## Uninstall
-
 ```
 ~/.config/omarchy/plugins/jwil007.aircap/bin/aircap uninstall
-omarchy plugin remove jwil007.aircap
+```
+This stops any running capture, removes the helper, the sudoers rule, and `~/.local/state/aircap`, then asks whether to remove the plugin. Wireshark and your captures are left in place.
+
+If you already removed the plugin with `omarchy plugin remove`, remove the rest by hand:
+```
+sudo rm -rf /etc/sudoers.d/aircap /usr/local/libexec/aircap /run/aircap
+rm -rf ~/.local/state/aircap
 ```
 
-This removes the helper and sudoers rule; Wireshark and your captures stay.
+## Usage
+
+### Bar icon
+A shark fin. While a capture runs it turns the urgent color and shows the packet count.
+
+- Left-click: open the panel
+- Right-click: start/stop a capture
+- Middle-click: open the latest capture in Wireshark
+
+### Choosing a channel
+- Bands and channels come from `iw phy`, so only channels enabled in your regulatory domain are listed. DFS and 6 GHz PSC channels are marked.
+- Width options are 20/40/80/160 MHz, 320 MHz on 6 GHz, and HT40+/HT40− on 2.4 GHz. A width is offered only when every 20 MHz channel in its block is enabled. The center frequency is calculated from the standard channel blocks and shown under the picker.
+- Each channel shows how many BSSIDs the last scan found with that channel as their primary channel, to help you pick a channel that will have traffic. **Hide empty** (on by default) lists only those channels, and switching bands selects the busiest channel. The band buttons show per-band totals.
+- **Use current** selects the channel and width you're connected on.
+
+### Capturing
+**Start capture** disconnects Wi-Fi for the duration of the capture, the same as Airtool. The panel shows packets, elapsed time, packet rate, and file size. **Stop capture** saves the file, sends a notification with the packet count, reconnects Wi-Fi, and opens the file in Wireshark if **Open in Wireshark when done** is on.
+
+Captures are saved to `~/Captures` (configurable) as `aircap_<band>-ch<N>-<width>MHz_<YYYYmmdd-HHMMSS>.pcapng`. The panel lists the most recent ones: click to open in Wireshark, or use the folder icon to show the file in the file manager.
+
+Keyboard shortcuts: `Enter` start/stop, `2`/`5`/`6` band, `c` current channel, `h` hide empty channels, `r` rescan, `w` open latest capture, `f` open captures folder.
+
+## How a capture works
+1. If `roamctl@<iface>` is running, it is stopped. If NetworkManager manages the interface, it is set to unmanaged and its IP addresses are flushed; otherwise iwd is stopped if it's running.
+2. The interface is switched to monitor mode and tuned with `iw dev <iface> set freq <control> <width> <center1>`.
+3. `dumpcap` runs until you stop it.
+4. The interface is switched back to managed mode, its driver is reset (see below), and it is handed back to NetworkManager or iwd. roamctl is restarted once the interface has reconnected.
+
+What was stopped is recorded in `/run/aircap/<iface>.state`, so the restore puts back exactly what was there. If a capture ends without restoring (for example, the shell is killed or the laptop sleeps), the panel shows **Restore Wi-Fi**.
+
+### Driver reset
+On ath12k (WCN7850), switching back from monitor mode leaves the firmware in a broken state. Wi-Fi reconnects, then 30–60 seconds later the connection drops (beacon loss) and every authentication attempt times out until the machine is rebooted. Unbinding and rebinding the driver reloads the firmware, which fixes it in a few seconds without a reboot. aircap does this after every capture. Turn off the `resetDriver` setting if your adapter doesn't need it.
+
+To reset the driver by hand, for example after a capture taken with `resetDriver` off:
+```
+omarchy-shell jwil007.aircap resetRadio
+```
+
+### BSSID counts
+Counts come from NetworkManager's scan list (`nmcli device wifi list`), which doesn't need root. NetworkManager drops BSSes it hasn't seen for a few minutes and rarely runs a full scan while connected, so opening the panel requests a new scan if the last one is more than 30 seconds old. The counts update a few seconds later. There is no scan data while a capture is running.
+
+## Limitations
+- Only one capture at a time, on one interface.
+- Wi-Fi is unavailable while capturing. Use a second adapter if you need to stay connected.
+- Channel hopping and remote capture are not supported.
+
+## Reference
+```
+bin/aircap setup|uninstall
+bin/aircap status [iface] [captureDir]
+bin/aircap capture IFACE FREQ WIDTH CENTER1 SNAPLEN RESET DIR LABEL
+bin/aircap stop|restore|reset IFACE
+bin/aircap open|reveal FILE
+```
+
+Shell IPC:
+```
+omarchy-shell jwil007.aircap open|close|toggle|start|stop|toggleCapture|restore|resetRadio|rescan|status
+```
+
+Settings are stored in the widget's entry in `~/.config/omarchy/shell.json`:
+
+| key               | default      | description |
+|-------------------|--------------|-------------|
+| `iface`           | `""`         | Wireless interface. Empty uses the first found. |
+| `captureDir`      | `~/Captures` | Where captures are saved |
+| `openInWireshark` | `true`       | Default for the panel's Wireshark toggle. The toggle remembers your last choice. |
+| `resetDriver`     | `true`       | Reset the Wi-Fi driver after each capture |
+| `snapLength`      | `0`          | Bytes kept per frame. 0 keeps whole frames. |
+
+## License
+MIT

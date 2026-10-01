@@ -222,6 +222,13 @@ case "${1:-}" in
   stop) (( $# == 2 )) || fail "usage: stop IFACE"; cmd_stop "$2" ;;
   restore) (( $# == 2 )) || fail "usage: restore IFACE"; cmd_restore "$2" ;;
   reset) (( $# == 2 )) || fail "usage: reset IFACE"; cmd_reset "$2" ;;
-  roamctl-after-connect) (( $# == 2 )) || fail "usage: roamctl-after-connect IFACE"; check_iface "$2"; cmd_roamctl_after_connect "$2" ;;
+  # Internal: only restore() schedules this, via systemd-run. Refuse it
+  # through sudo so the sudoers rule can't be used to start roamctl.
+  roamctl-after-connect)
+    [[ -z ${SUDO_USER:-} ]] || fail "internal command"
+    (( $# == 2 )) || fail "usage: roamctl-after-connect IFACE"
+    check_iface "$2"
+    cmd_roamctl_after_connect "$2"
+    ;;
   *) fail "usage: aircap-helper capture|stop|restore|reset IFACE ..." ;;
 esac

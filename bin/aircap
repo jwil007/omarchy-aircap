@@ -69,10 +69,23 @@ cmd_uninstall() {
   if [[ ${1:-} != --yes ]]; then
     in_terminal "$SELF uninstall --yes"
   fi
+  # Stop a running capture (or undo a stranded one) while the helper exists.
+  local dev
+  for dev in /sys/class/net/*; do
+    [[ -d $dev/phy80211 && -x $HELPER ]] || continue
+    if [[ -e /run/aircap/$(basename "$dev").pid || -e /run/aircap/$(basename "$dev").state ]]; then
+      sudo "$HELPER" stop "$(basename "$dev")" || true
+    fi
+  done
   sudo rm -f "$SUDOERS"
-  sudo rm -rf "$(dirname "$HELPER")"
+  sudo rm -rf "$(dirname "$HELPER")" /run/aircap
   rm -rf "$STATE_DIR"
-  echo "Removed the helper and sudoers rule. Wireshark and your captures were left in place."
+  echo
+  echo "Removed $HELPER and $SUDOERS."
+  echo "Wireshark and your captures were left in place."
+  echo
+  read -rp "Also remove the plugin (omarchy plugin remove jwil007.aircap)? [y/N] " answer
+  [[ $answer == [yY]* ]] && omarchy plugin remove jwil007.aircap
 }
 
 cmd_status() {
