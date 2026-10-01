@@ -25,7 +25,10 @@ Panel {
   readonly property var lastCapture: cap.captures.length > 0 ? cap.captures[0] : null
 
   readonly property string detail: {
-    if (cap.capturing) return cap.stopping ? "Stopping…" : cap.phase === "configuring" ? "Tuning…" : "Capturing"
+    if (cap.capturing) {
+      if (cap.phase === "resetting") return "Resetting radio…"
+      return cap.stopping ? "Stopping…" : cap.phase === "configuring" ? "Tuning…" : "Capturing"
+    }
     if (cap.stranded) return "Monitor mode"
     if (!cap.statusKnown) return ""
     return cap.ready ? "Ready" : "Setup needed"
@@ -82,6 +85,8 @@ Panel {
     function stop(): void { cap.stop() }
     function toggleCapture(): void { cap.toggle() }
     function restore(): void { cap.restore() }
+    function resetRadio(): void { cap.resetRadio() }
+    function rescan(): void { cap.rescan() }
     function status(): string { return root.tooltip }
   }
 
@@ -142,6 +147,7 @@ Panel {
         else if (key === "1" || key === "2") cap.selectBand("2.4")
         else if (key === "5") cap.selectBand("5")
         else if (key === "6") cap.selectBand("6")
+        else if (key === "r") cap.rescan()
       }
 
       Flickable {
@@ -285,9 +291,20 @@ Panel {
 
               PanelSectionHeader {
                 Layout.fillWidth: true
-                text: "CHANNEL"
+                text: "CHANNEL" + (cap.scan ? " · " + cap.scan.length + " BSSIDS SEEN" : "")
                 foreground: root.foreground
                 fontFamily: root.fontFamily
+              }
+
+              PanelActionButton {
+                visible: cap.ifaceType === "managed"
+                iconText: "\uf021"
+                tooltipText: cap.rescanning ? "Scanning…" : "Rescan for BSSIDs (r)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                enabled: !cap.rescanning
+                opacity: enabled ? 1 : 0.4
+                onClicked: cap.rescan()
               }
 
               Button {
@@ -302,7 +319,9 @@ Panel {
             }
 
             ButtonGroup {
-              options: cap.bands
+              options: cap.bands.map(function(b) {
+                return cap.scan ? { value: b.value, label: b.label + " · " + Model.bandCount(cap.scanSummary, b.value) } : b
+              })
               value: cap.band
               focusable: false
               foreground: root.foreground
@@ -311,10 +330,11 @@ Panel {
               onChanged: function(v) { cap.selectBand(v) }
             }
 
-            Dropdown {
+            ChannelDropdown {
               width: parent.width
-              showLabel: false
-              options: cap.bandChannelList.map(function(c) { return { value: String(c.freq), label: Model.channelLabel(c) } })
+              rows: Model.channelRows(cap.bandChannelList, cap.scanSummary)
+              maxCount: cap.scanMax
+              hasScan: cap.scan !== null
               value: String(cap.freq)
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -342,6 +362,17 @@ Panel {
                 fontSize: Style.font.bodySmall
                 onChanged: function(v) { cap.selectWidth(v) }
               }
+            }
+
+            Text {
+              visible: cap.scan !== null
+              width: parent.width
+              textFormat: Text.PlainText
+              text: Model.scanDetail(cap.scanSummary, cap.freq)
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
 
             Text {

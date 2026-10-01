@@ -53,13 +53,6 @@ function isPsc(c) {
   return bandOf(c.freq) === "6" && (c.ch - 5) % 16 === 0
 }
 
-function channelLabel(c) {
-  var tags = []
-  if (c.radar) tags.push("DFS")
-  if (isPsc(c)) tags.push("PSC")
-  return c.ch + "  ·  " + c.freq + " MHz" + (tags.length ? "  ·  " + tags.join(" ") : "")
-}
-
 // Standard 802.11 bonding blocks. 5 GHz counts from 36 below UNII-3 and from
 // 149 above it; 6 GHz counts from channel 1. 320 MHz uses the 320-1 set.
 function block(band, ch, width) {
@@ -162,4 +155,94 @@ function whenText(epochSeconds) {
   var time = pad(d.getHours()) + ":" + pad(d.getMinutes())
   if (d.toDateString() === now.toDateString()) return time
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + time
+}
+
+// ── Scan data ────────────────────────────────────────────────────────────
+// `scan` is NetworkManager's cached BSS list: {freq, width, signal, bssid,
+// ssid}, signal being NM's 0-100 quality (width 0 = unknown).
+
+// Inverse of NM's nm_wifi_utils_level_to_quality(): -40 dBm = 100, -100 = 0.
+function qualityToDbm(q) {
+  return Math.round(-40 - (100 - q) * 0.6)
+}
+
+function dbmText(q) {
+  return "≈" + String(qualityToDbm(q)).replace("-", "−")
+}
+
+// Per channel (keyed by freq): BSSIDs whose primary channel it is, plus
+// wider BSSes whose bonded block covers it (their data frames land here,
+// their beacons don't).
+function scanByChannel(channels, scan) {
+  var out = {}
+  for (var i = 0; i < channels.length; i++) out[channels[i].freq] = { count: 0, overlap: 0, best: -1, ssids: {} }
+  if (!scan) return out
+  for (var j = 0; j < scan.length; j++) {
+    var b = scan[j]
+    var entry = out[b.freq]
+    if (entry) {
+      entry.count += 1
+      if (b.signal > entry.best) entry.best = b.signal
+      if (b.ssid) entry.ssids[b.ssid] = true
+    }
+    var band = bandOf(b.freq)
+    if (band === "2.4" || !(b.width > 20)) continue
+    var ch = findChannel(channels, b.freq)
+    if (!ch) continue
+    var members = block(band, ch.ch, b.width).members
+    for (var k = 0; k < members.length; k++) {
+      var f = chanFreq(band, members[k])
+      if (f !== b.freq && out[f]) out[f].overlap += 1
+    }
+  }
+  return out
+}
+
+function maxCount(summary) {
+  var max = 0
+  for (var f in summary) max = Math.max(max, summary[f].count)
+  return max
+}
+
+function bandCount(summary, band) {
+  var n = 0
+  for (var f in summary) if (bandOf(Number(f)) === band) n += summary[f].count
+  return n
+}
+
+// "9 BSSIDs (8 SSIDs) · +5 bonded across it · best ≈−45 dBm"
+function scanDetail(summary, freq) {
+  var s = summary[freq]
+  if (!s) return ""
+  if (s.count === 0 && s.overlap === 0) return "No BSSIDs seen in the last scan"
+  var parts = []
+  if (s.count > 0) {
+    var ssids = Object.keys(s.ssids).length
+    parts.push(s.count + " BSSID" + (s.count === 1 ? "" : "s") + (ssids > 0 && ssids !== s.count ? " (" + ssids + " SSID" + (ssids === 1 ? "" : "s") + ")" : ""))
+  } else {
+    parts.push("No primary BSSIDs")
+  }
+  if (s.overlap > 0) parts.push("+" + s.overlap + " wider BSS" + (s.overlap === 1 ? "" : "es") + " bonded across it")
+  if (s.best >= 0) parts.push("best " + dbmText(s.best) + " dBm")
+  return parts.join(" · ")
+}
+
+// Rows for ChannelDropdown.
+function channelRows(list, summary) {
+  return list.map(function(c) {
+    var s = summary[c.freq] || { count: 0, overlap: 0, best: -1, ssids: {} }
+    var tags = []
+    if (c.radar) tags.push("DFS")
+    if (isPsc(c)) tags.push("PSC")
+    return {
+      value: String(c.freq),
+      ch: c.ch,
+      freq: c.freq,
+      tags: tags.join(" "),
+      count: s.count,
+      overlap: s.overlap,
+      best: s.best,
+      ssidCount: Object.keys(s.ssids).length
+    }
+  })
 }

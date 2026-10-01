@@ -16,6 +16,7 @@ Item {
   readonly property string configuredIface: String(setting("iface", "") || "").trim()
   readonly property string captureDir: String(setting("captureDir", "") || "").trim() || "~/Captures"
   readonly property int snapLength: Math.max(0, parseInt(String(setting("snapLength", 0)), 10) || 0)
+  readonly property bool resetDriver: setting("resetDriver", true) === true
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/aircap"
 
   // Radio + setup status
@@ -31,6 +32,13 @@ Item {
   property bool setupCurrent: false
   property var captures: []
   property var lastTuning: null
+
+  // NetworkManager's cached scan list. Kept across captures (NM has nothing
+  // while the interface is in monitor mode).
+  property var scan: null
+  property bool rescanning: rescanProcess.running || rescanSettle.running
+  readonly property var scanSummary: Model.scanByChannel(channels, scan)
+  readonly property int scanMax: Model.maxCount(scanSummary)
   readonly property bool ready: dumpcapInstalled && setupCurrent && iface !== ""
   // Left in monitor mode with nothing capturing: a capture died uncleanly.
   readonly property bool stranded: statusKnown && ifaceType === "monitor" && !capturing
@@ -100,6 +108,7 @@ Item {
     setupCurrent = s.setupCurrent === true
     captures = s.captures || []
     lastTuning = s.last || null
+    if (Array.isArray(s.scan) && JSON.stringify(s.scan) !== JSON.stringify(scan)) scan = s.scan
 
     detachedCapture = !ownCapture && s.capturing === true
     if (detachedCapture && s.activeCapture) {
@@ -177,7 +186,7 @@ Item {
     startedAt = Date.now()
     tuning = Model.tuningText(channel, opt)
     captureProcess.command = [toolPath, "capture", iface, String(freq), String(opt.width), String(opt.center),
-      String(snapLength), captureDir, Model.fileLabel(channel, opt.width)]
+      String(snapLength), resetDriver ? "1" : "0", captureDir, Model.fileLabel(channel, opt.width)]
     captureProcess.running = true
   }
 
@@ -194,11 +203,22 @@ Item {
     else start()
   }
 
-  function restore() {
+  function restore() { helperCommand("restore") }
+  function resetRadio() { if (!capturing) helperCommand("reset") }
+
+  function helperCommand(action) {
     if (stopProcess.running) return
     lastError = ""
-    stopProcess.command = [toolPath, "restore", iface]
+    stopProcess.command = [toolPath, action, iface]
     stopProcess.running = true
+  }
+
+  // Ask NM for a fresh scan; results land a few seconds later (6 GHz takes
+  // longest), so status is re-read once the scan has had time to finish.
+  function rescan() {
+    if (capturing || ifaceType !== "managed" || rescanning) return
+    rescanProcess.command = ["nmcli", "device", "wifi", "rescan", "ifname", iface]
+    rescanProcess.running = true
   }
 
   function setup() { Quickshell.execDetached([toolPath, "setup"]) }
@@ -223,6 +243,7 @@ Item {
       if (phase === "capturing") startedAt = Date.now()
     }
     else if ((m = /^aircap: error=(.*)$/.exec(line))) _captureError = m[1]
+    else if ((m = /^aircap: (warning=.*)$/.exec(line))) _captureError = m[1]
     else if ((m = /^aircap: (.*)$/.exec(line))) _captureError = m[1]
     else if (/^(sudo|dumpcap): /.test(line) && !/^dumpcap: Running as user/.test(line)) _captureError = line
   }
@@ -232,6 +253,7 @@ Item {
     var path = file
     phase = ""
     stopping = false
+    if (_captureError.indexOf("warning=") === 0) notify("Wi-Fi reset problem", _captureError.slice(8), "normal")
     if (exitCode !== 0) {
       lastError = _captureError || "Capture failed (exit " + exitCode + ")"
       notify("Capture failed", lastError, "normal")
@@ -263,6 +285,27 @@ Item {
       onRead: function(line) { root.handleLine(String(line)) }
     }
     onExited: function(exitCode) { root.finishCapture(exitCode) }
+  }
+
+  Process {
+    id: rescanProcess
+    stderr: StdioCollector {
+      id: rescanErr
+      waitForEnd: true
+    }
+    onExited: function(exitCode) {
+      // NM refuses a rescan right after another one; the cached list is
+      // still fresh then, so that isn't worth reporting.
+      var message = String(rescanErr.text || "").trim()
+      if (exitCode !== 0 && !/not allowed|already|busy/i.test(message)) root.lastError = message.split("\n").pop() || "Rescan failed"
+      rescanSettle.restart()
+    }
+  }
+
+  Timer {
+    id: rescanSettle
+    interval: 6000
+    onTriggered: root.refresh()
   }
 
   Process {

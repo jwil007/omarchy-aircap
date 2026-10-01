@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "jwil007.aircap",
   "name": "aircap",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "author": "jwil007",
   "license": "MIT",
   "description": "One-click monitor-mode Wi-Fi packet captures from the bar: pick a channel and width, watch the packet count, open the result in Wireshark.",
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "aircap",
-    "description": "Monitor-mode Wi-Fi capture. Click: panel · Right: start/stop · Middle: open last capture.",
+    "description": "Monitor-mode Wi-Fi capture. Click: panel \u00b7 Right: start/stop \u00b7 Middle: open last capture.",
     "category": "Network",
     "allowMultiple": false,
     "defaultSection": "right",
@@ -22,7 +22,8 @@
       "iface": "",
       "captureDir": "~/Captures",
       "openInWireshark": true,
-      "snapLength": 0
+      "snapLength": 0,
+      "resetDriver": true
     },
     "schema": [
       {
@@ -44,6 +45,13 @@
         "type": "boolean",
         "label": "Open in Wireshark when done",
         "description": "Default for the panel toggle; the toggle remembers your last choice.",
+        "defaultValue": true
+      },
+      {
+        "key": "resetDriver",
+        "type": "boolean",
+        "label": "Reset Wi-Fi driver after capture",
+        "description": "Rebinds the driver when switching back from monitor mode. Needed on ath12k, whose firmware otherwise stops working a minute later until a reboot.",
         "defaultValue": true
       },
       {

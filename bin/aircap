@@ -6,10 +6,12 @@
 #   aircap uninstall          remove the helper and sudoers rule (keeps captures)
 #   aircap status [iface] [captureDir]
 #                             JSON status for the shell plugin
-#   aircap capture IFACE FREQ WIDTH CENTER1 SNAPLEN DIR LABEL
-#                             run a capture into DIR/aircap_LABEL_<time>.pcapng
+#   aircap capture IFACE FREQ WIDTH CENTER1 SNAPLEN RESET DIR LABEL
+#                             run a capture into DIR/aircap_LABEL_<time>.pcapng;
+#                             RESET=1 resets the Wi-Fi driver afterwards
 #   aircap stop IFACE         stop the running capture and restore Wi-Fi
 #   aircap restore IFACE      restore Wi-Fi after a capture that didn't clean up
+#   aircap reset IFACE        reset (rebind) the Wi-Fi driver, e.g. if the radio went deaf
 #   aircap open FILE          open a capture in Wireshark
 #   aircap reveal FILE        show a capture in the file manager
 #
@@ -78,9 +80,9 @@ cmd_status() {
 }
 
 cmd_capture() {
-  (( $# == 7 )) || fail "usage: capture IFACE FREQ WIDTH CENTER1 SNAPLEN DIR LABEL"
-  local iface=$1 freq=$2 width=$3 center=$4 snaplen=$5 dir label=$7
-  dir=$(expand_dir "$6")
+  (( $# == 8 )) || fail "usage: capture IFACE FREQ WIDTH CENTER1 SNAPLEN RESET DIR LABEL"
+  local iface=$1 freq=$2 width=$3 center=$4 snaplen=$5 reset=$6 dir label=$8
+  dir=$(expand_dir "$7")
   [[ $label =~ ^[A-Za-z0-9._-]{1,40}$ ]] || fail "bad label"
   [[ -x $HELPER ]] || fail "not set up yet; run setup from the panel"
   mkdir -p "$dir" "$STATE_DIR" || fail "can't create $dir"
@@ -93,7 +95,7 @@ cmd_capture() {
   echo "aircap: file=$file" >&2
 
   local rc=0
-  sudo -n "$HELPER" capture "$iface" "$freq" "$width" "$center" "$snaplen" >"$file" || rc=$?
+  sudo -n "$HELPER" capture "$iface" "$freq" "$width" "$center" "$snaplen" "$reset" >"$file" || rc=$?
   [[ -s $file ]] || rm -f "$file"
   rm -f "$STATE_DIR/current.json"
   exit "$rc"
@@ -117,7 +119,8 @@ case "${1:-}" in
   capture) shift; cmd_capture "$@" ;;
   stop) exec sudo -n "$HELPER" stop "${2:?iface}" ;;
   restore) exec sudo -n "$HELPER" restore "${2:?iface}" ;;
+  reset) exec sudo -n "$HELPER" reset "${2:?iface}" ;;
   open) cmd_open "${2:-}" ;;
   reveal) cmd_reveal "${2:-}" ;;
-  *) sed -n '3,17p' "$SELF" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '3,19p' "$SELF" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

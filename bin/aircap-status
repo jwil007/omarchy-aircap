@@ -98,6 +98,35 @@ def recent_captures(directory, limit=6):
              "mtime": int(e.stat().st_mtime)} for e in entries[:limit]]
 
 
+NMCLI_SPLIT = re.compile(r"(?<!\\):")
+
+
+def scan_results(iface):
+    """NetworkManager's cached scan list (no root needed; no new scan).
+
+    SIGNAL is NM's 0-100 quality, not dBm. BANDWIDTH is 0 when NM can't
+    tell (e.g. 6 GHz BSSes, whose width is in the HE operation element).
+    """
+    out = run("nmcli", "-t", "-f", "FREQ,BANDWIDTH,SIGNAL,BSSID,SSID",
+              "device", "wifi", "list", "ifname", iface, "--rescan", "no")
+    bsses = []
+    for line in out.splitlines():
+        parts = NMCLI_SPLIT.split(line, maxsplit=4)
+        if len(parts) < 5:
+            continue
+        try:
+            bsses.append({
+                "freq": int(parts[0].split()[0]),
+                "width": int(parts[1].split()[0]),
+                "signal": int(parts[2]),
+                "bssid": parts[3].replace("\\:", ":"),
+                "ssid": parts[4].replace("\\:", ":"),
+            })
+        except (ValueError, IndexError):
+            continue
+    return bsses
+
+
 def main():
     iface, capture_dir, helper, state_dir = (sys.argv[1:] + ["", "", "", ""])[:4]
     iface = iface or default_iface()
@@ -122,6 +151,7 @@ def main():
     status["activeCapture"] = read_json(os.path.join(state_dir, "current.json")) if status["capturing"] else None
     status["last"] = read_json(os.path.join(state_dir, "last.json"))
     status["captures"] = recent_captures(capture_dir)
+    status["scan"] = scan_results(iface) if iface and status.get("type") == "managed" else None
     json.dump(status, sys.stdout)
 
 
