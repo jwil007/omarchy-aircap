@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""JSON status for the aircap shell plugin.
+
+    aircap-status IFACE CAPTURE_DIR HELPER STATE_DIR
+
+IFACE may be empty (first wireless interface). Reports the radio's enabled
+channels (so the panel only offers what the regulatory domain allows), its
+current mode and channel, whether a capture is running, setup state, and the
+newest captures in CAPTURE_DIR.
+"""
+
+import filecmp
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+RUN_DIR = "/run/aircap"
+HERE = os.path.dirname(os.path.realpath(__file__))
+CHAN_RE = re.compile(r"^\s+\* (\d+)(?:\.\d+)? MHz \[(\d+)\](.*)$")
+
+
+def run(*args):
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def default_iface():
+    for name in sorted(os.listdir("/sys/class/net")):
+        if os.path.isdir(f"/sys/class/net/{name}/phy80211"):
+            return name
+    return ""
+
+
+def dev_info(iface):
+    info = {"type": "", "ssid": "", "current": None}
+    for line in run("iw", "dev", iface, "info").splitlines():
+        line = line.strip()
+        if line.startswith("type "):
+            info["type"] = line.split()[1]
+        elif line.startswith("ssid "):
+            info["ssid"] = line[5:]
+        elif line.startswith("channel "):
+            # channel 36 (5180 MHz), width: 80 MHz, center1: 5210 MHz
+            m = re.search(r"\((\d+) MHz\), width: (\d+) MHz(?:, center1: (\d+) MHz)?", line)
+            if m:
+                info["current"] = {
+                    "freq": int(m.group(1)),
+                    "width": int(m.group(2)),
+                    "center": int(m.group(3) or m.group(1)),
+                }
+    return info
+
+
+def channels(phy):
+    out = []
+    for line in run("iw", "phy", phy, "info").splitlines():
+        m = CHAN_RE.match(line)
+        if not m or "disabled" in m.group(3):
+            continue
+        out.append({
+            "freq": int(m.group(1)),
+            "ch": int(m.group(2)),
+            "radar": "radar detection" in m.group(3),
+            "noIR": "no IR" in m.group(3),
+        })
+    return out
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def capture_running(iface):
+    try:
+        pid = int(open(f"{RUN_DIR}/{iface}.pid").read().strip())
+        return open(f"/proc/{pid}/comm").read().strip() == "dumpcap"
+    except (OSError, ValueError):
+        return False
+
+
+def recent_captures(directory, limit=6):
+    try:
+        entries = [e for e in os.scandir(directory)
+                   if e.is_file() and e.name.endswith((".pcapng", ".pcap"))]
+    except OSError:
+        return []
+    entries.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+    return [{"path": e.path, "name": e.name, "size": e.stat().st_size,
+             "mtime": int(e.stat().st_mtime)} for e in entries[:limit]]
+
+
+def main():
+    iface, capture_dir, helper, state_dir = (sys.argv[1:] + ["", "", "", ""])[:4]
+    iface = iface or default_iface()
+    status = {"iface": iface, "phy": "", "captureDir": capture_dir}
+    if iface and os.path.isdir(f"/sys/class/net/{iface}/phy80211"):
+        status["phy"] = os.path.basename(os.path.realpath(f"/sys/class/net/{iface}/phy80211"))
+        status.update(dev_info(iface))
+        status["channels"] = channels(status["phy"])
+
+    # Arch ships dumpcap as root:wireshark 0754, so it isn't on the user's
+    # PATH unless they're in that group; the root helper runs it either way.
+    status["dumpcap"] = any(os.path.isfile(os.path.join(d, "dumpcap"))
+                            for d in ("/usr/bin", "/usr/local/bin"))
+    status["wireshark"] = shutil.which("wireshark") is not None
+    status["helperInstalled"] = os.path.exists(helper)
+    try:
+        status["setupCurrent"] = filecmp.cmp(helper, os.path.join(HERE, "aircap-helper"), shallow=False)
+    except OSError:
+        status["setupCurrent"] = False
+
+    status["capturing"] = bool(iface) and capture_running(iface)
+    status["activeCapture"] = read_json(os.path.join(state_dir, "current.json")) if status["capturing"] else None
+    status["last"] = read_json(os.path.join(state_dir, "last.json"))
+    status["captures"] = recent_captures(capture_dir)
+    json.dump(status, sys.stdout)
+
+
+if __name__ == "__main__":
+    main()

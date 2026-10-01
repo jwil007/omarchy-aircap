@@ -1,0 +1,163 @@
+#!/bin/bash
+
+# Root half of the aircap Omarchy plugin. `aircap setup` installs a root-owned
+# copy at /usr/local/libexec/aircap/aircap-helper and lets %wheel run it via
+# /etc/sudoers.d/aircap, so it takes no paths from the caller: the capture is
+# written to stdout, which the unprivileged wrapper redirects into a file the
+# user owns. Everything else goes to stderr as "aircap: key=value" lines,
+# interleaved with dumpcap's own output ("Packets: N" once per update).
+#
+#   aircap-helper capture IFACE FREQ WIDTH CENTER1 SNAPLEN
+#       take IFACE away from NetworkManager/iwd (and roamctl), switch it to
+#       monitor mode on FREQ (MHz) at WIDTH (20/40/80/160/320) centred on
+#       CENTER1, and run dumpcap until stopped; Wi-Fi is restored on exit
+#   aircap-helper stop IFACE      stop the running capture (restores Wi-Fi)
+#   aircap-helper restore IFACE   put IFACE back in managed mode if a capture
+#                                 died without cleaning up
+
+set -uo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/bin
+umask 022
+
+RUN_DIR=/run/aircap
+
+log() { echo "aircap: $*" >&2; }
+fail() { log "error=$*"; exit 1; }
+
+is_uint() { [[ $1 =~ ^[0-9]{1,6}$ ]]; }
+
+check_iface() {
+  [[ $1 =~ ^[A-Za-z0-9_.-]{1,15}$ && -d /sys/class/net/$1/phy80211 ]] || fail "$1 is not a wireless interface"
+}
+
+phy_of() { basename "$(readlink -f "/sys/class/net/$1/phy80211")"; }
+
+iface_type() { iw dev "$1" info 2>/dev/null | awk '$1 == "type" { print $2; exit }'; }
+
+# The live dumpcap PID for IFACE, if a capture is running.
+capture_pid() {
+  local pid
+  [[ -r $RUN_DIR/$1.pid ]] || return 1
+  pid=$(<"$RUN_DIR/$1.pid")
+  is_uint "$pid" && [[ $(cat "/proc/$pid/comm" 2>/dev/null) == dumpcap ]] || return 1
+  echo "$pid"
+}
+
+# Record who owned the interface, then stop them. roamctl goes first so it
+# doesn't log the disconnect as a failure.
+take_over() {
+  local iface=$1 state=$RUN_DIR/$1.state nm_state=""
+  : >"$state"
+  if systemctl is-active -q "roamctl@$iface"; then
+    echo roamctl >>"$state"
+    systemctl stop "roamctl@$iface"
+  fi
+  command -v nmcli >/dev/null && nm_state=$(nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null)
+  if [[ -n $nm_state && $nm_state != *unmanaged* ]]; then
+    echo nm >>"$state"
+    nmcli device set "$iface" managed no >&2
+  elif systemctl is-active -q iwd; then
+    echo iwd >>"$state"
+    systemctl stop iwd
+  fi
+}
+
+restore() {
+  local iface=$1 state=$RUN_DIR/$1.state
+  log state=restoring
+  ip link set dev "$iface" down 2>/dev/null
+  iw dev "$iface" set type managed 2>/dev/null
+  ip link set dev "$iface" up 2>/dev/null
+  if [[ -f $state ]]; then
+    grep -qx nm "$state" && nmcli device set "$iface" managed yes >&2
+    grep -qx iwd "$state" && systemctl start iwd
+    grep -qx roamctl "$state" && systemctl start "roamctl@$iface"
+  elif command -v nmcli >/dev/null; then
+    # No record (e.g. a reboot wiped /run mid-capture): NetworkManager is the
+    # safe owner to hand it back to on a system that has it.
+    nmcli device set "$iface" managed yes >&2 2>/dev/null
+  fi
+  rm -f "$state" "$RUN_DIR/$iface.pid"
+  log state=restored
+}
+
+cmd_capture() {
+  local iface=$1 freq=$2 width=$3 center=$4 snaplen=$5
+  check_iface "$iface"
+  is_uint "$freq" && is_uint "$center" && is_uint "$snaplen" || fail "bad arguments"
+  [[ $width =~ ^(20|40|80|160|320)$ ]] || fail "unsupported width $width"
+  (( snaplen <= 262144 )) || fail "snap length too large"
+  (( center == 0 || (center - freq <= 160 && freq - center <= 160) )) || fail "center frequency $center doesn't contain $freq"
+  command -v dumpcap >/dev/null || fail "dumpcap not found (install wireshark-cli)"
+  iw phy "$(phy_of "$iface")" info | grep -E "^\s+\* $freq(\.0)? MHz \[" | grep -qv disabled ||
+    fail "$freq MHz isn't enabled on $iface in this regulatory domain"
+
+  mkdir -p -m 755 "$RUN_DIR"
+  exec 9>"$RUN_DIR/$iface.lock"
+  flock -n 9 || fail "a capture is already running on $iface"
+  capture_pid "$iface" >/dev/null && fail "a capture is already running on $iface"
+
+  # A capture that died without restoring leaves a state file behind; keep
+  # it so the eventual restore still hands the interface to the right owner.
+  if [[ $(iface_type "$iface") != monitor || ! -f $RUN_DIR/$iface.state ]]; then
+    take_over "$iface"
+  fi
+  trap 'restore "$iface"' EXIT
+  log state=configuring
+
+  local ok=0
+  for _ in {1..20}; do
+    ip link set dev "$iface" down 2>/dev/null
+    if iw dev "$iface" set type monitor 2>/dev/null; then ok=1; break; fi
+    sleep 0.25
+  done
+  (( ok )) || fail "couldn't put $iface in monitor mode"
+  ip link set dev "$iface" up || fail "couldn't bring $iface up"
+
+  local chan=(20)
+  (( width > 20 )) && chan=("$width" "$center")
+  iw dev "$iface" set freq "$freq" "${chan[@]}" >&2 ||
+    fail "the driver rejected $freq MHz at $width MHz"
+
+  local args=(-i "$iface" -w -)
+  (( snaplen > 0 )) && args+=(-s "$snaplen")
+  # dumpcap redraws its packet count with \r; turn those into lines.
+  dumpcap "${args[@]}" 2> >(stdbuf -oL tr '\r' '\n' >&2) &
+  local pid=$!
+  echo "$pid" >"$RUN_DIR/$iface.pid"
+  trap 'kill -INT "$pid" 2>/dev/null' INT TERM HUP
+  log state=capturing
+
+  local rc=0
+  while kill -0 "$pid" 2>/dev/null; do
+    wait "$pid"
+    rc=$?
+  done
+  (( rc > 128 )) && rc=0   # stopped by signal is the normal way out
+  exit "$rc"
+}
+
+cmd_stop() {
+  local iface=$1 pid
+  check_iface "$iface"
+  if pid=$(capture_pid "$iface"); then
+    kill -INT "$pid"
+  elif [[ $(iface_type "$iface") == monitor ]]; then
+    restore "$iface"
+  fi
+}
+
+cmd_restore() {
+  check_iface "$1"
+  capture_pid "$1" >/dev/null && fail "a capture is still running on $1; stop it instead"
+  restore "$1"
+}
+
+(( EUID == 0 )) || fail "must run as root"
+
+case "${1:-}" in
+  capture) (( $# == 6 )) || fail "usage: capture IFACE FREQ WIDTH CENTER1 SNAPLEN"; shift; cmd_capture "$@" ;;
+  stop) (( $# == 2 )) || fail "usage: stop IFACE"; cmd_stop "$2" ;;
+  restore) (( $# == 2 )) || fail "usage: restore IFACE"; cmd_restore "$2" ;;
+  *) fail "usage: aircap-helper capture|stop|restore IFACE ..." ;;
+esac

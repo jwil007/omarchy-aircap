@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "jwil007.aircap",
+  "name": "aircap",
+  "version": "0.1.0",
+  "author": "jwil007",
+  "license": "MIT",
+  "description": "One-click monitor-mode Wi-Fi packet captures from the bar: pick a channel and width, watch the packet count, open the result in Wireshark.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "aircap",
+    "description": "Monitor-mode Wi-Fi capture. Click: panel · Right: start/stop · Middle: open last capture.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "iface": "",
+      "captureDir": "~/Captures",
+      "openInWireshark": true,
+      "snapLength": 0
+    },
+    "schema": [
+      {
+        "key": "iface",
+        "type": "string",
+        "label": "Wireless interface",
+        "description": "Leave empty to use the first wireless interface.",
+        "defaultValue": ""
+      },
+      {
+        "key": "captureDir",
+        "type": "string",
+        "label": "Save captures to",
+        "description": "Folder for .pcapng files (~ is your home).",
+        "defaultValue": "~/Captures"
+      },
+      {
+        "key": "openInWireshark",
+        "type": "boolean",
+        "label": "Open in Wireshark when done",
+        "description": "Default for the panel toggle; the toggle remembers your last choice.",
+        "defaultValue": true
+      },
+      {
+        "key": "snapLength",
+        "type": "integer",
+        "label": "Snap length (bytes)",
+        "description": "Truncate each frame to this many bytes. 0 keeps whole frames.",
+        "min": 0,
+        "max": 262144,
+        "step": 64,
+        "defaultValue": 0
+      }
+    ]
+  }
+}

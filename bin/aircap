@@ -1,0 +1,123 @@
+#!/bin/bash
+
+# Omarchy glue for aircap: monitor-mode Wi-Fi captures from the bar.
+#
+#   aircap setup [--yes]      install Wireshark, the root helper, and its sudoers rule
+#   aircap uninstall          remove the helper and sudoers rule (keeps captures)
+#   aircap status [iface] [captureDir]
+#                             JSON status for the shell plugin
+#   aircap capture IFACE FREQ WIDTH CENTER1 SNAPLEN DIR LABEL
+#                             run a capture into DIR/aircap_LABEL_<time>.pcapng
+#   aircap stop IFACE         stop the running capture and restore Wi-Fi
+#   aircap restore IFACE      restore Wi-Fi after a capture that didn't clean up
+#   aircap open FILE          open a capture in Wireshark
+#   aircap reveal FILE        show a capture in the file manager
+#
+# When IFACE is omitted, the first wireless interface is used.
+
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+HERE="$(dirname "$SELF")"
+HELPER=/usr/local/libexec/aircap/aircap-helper
+SUDOERS=/etc/sudoers.d/aircap
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/aircap"
+
+fail() {
+  echo "aircap: $*" >&2
+  exit 1
+}
+
+in_terminal() {
+  exec omarchy-launch-floating-terminal-with-presentation "$*"
+}
+
+expand_dir() {
+  local dir=${1:-~/Captures}
+  echo "${dir/#\~/$HOME}"
+}
+
+cmd_setup() {
+  if [[ ${1:-} != --yes ]]; then
+    in_terminal "$SELF setup --yes"
+  fi
+  echo "aircap setup"
+  echo
+  echo "  • Wireshark (wireshark-qt, which includes dumpcap)"
+  echo "  • $HELPER (root-owned copy of the plugin's helper)"
+  echo "  • $SUDOERS: lets wheel run that helper without a password"
+  echo
+  echo "The helper only switches the Wi-Fi interface into monitor mode, runs"
+  echo "dumpcap, and switches it back. Captures are written by you, not root."
+  echo
+  omarchy-pkg-add wireshark-qt
+
+  local tmp
+  tmp=$(mktemp)
+  trap 'rm -f "$tmp"' EXIT
+  echo "%wheel ALL=(root) NOPASSWD: $HELPER" >"$tmp"
+  visudo -cqf "$tmp" || fail "generated sudoers rule failed validation"
+  sudo install -Dm755 -o root -g root "$HERE/aircap-helper" "$HELPER"
+  sudo install -Dm440 -o root -g root "$tmp" "$SUDOERS"
+  echo
+  echo "Done. Close this window and start a capture from the bar."
+}
+
+cmd_uninstall() {
+  if [[ ${1:-} != --yes ]]; then
+    in_terminal "$SELF uninstall --yes"
+  fi
+  sudo rm -f "$SUDOERS"
+  sudo rm -rf "$(dirname "$HELPER")"
+  rm -rf "$STATE_DIR"
+  echo "Removed the helper and sudoers rule. Wireshark and your captures were left in place."
+}
+
+cmd_status() {
+  exec python3 "$HERE/aircap-status" "${1:-}" "$(expand_dir "${2:-}")" "$HELPER" "$STATE_DIR"
+}
+
+cmd_capture() {
+  (( $# == 7 )) || fail "usage: capture IFACE FREQ WIDTH CENTER1 SNAPLEN DIR LABEL"
+  local iface=$1 freq=$2 width=$3 center=$4 snaplen=$5 dir label=$7
+  dir=$(expand_dir "$6")
+  [[ $label =~ ^[A-Za-z0-9._-]{1,40}$ ]] || fail "bad label"
+  [[ -x $HELPER ]] || fail "not set up yet; run setup from the panel"
+  mkdir -p "$dir" "$STATE_DIR" || fail "can't create $dir"
+
+  local file
+  file="$dir/aircap_${label}_$(date +%Y%m%d-%H%M%S).pcapng"
+  printf '{"freq": %d, "width": %d, "center": %d}\n' "$freq" "$width" "$center" >"$STATE_DIR/last.json"
+  printf '{"iface": "%s", "file": "%s", "label": "%s", "startedAt": %d}\n' \
+    "$iface" "${file//\"/\\\"}" "$label" "$(date +%s)" >"$STATE_DIR/current.json"
+  echo "aircap: file=$file" >&2
+
+  local rc=0
+  sudo -n "$HELPER" capture "$iface" "$freq" "$width" "$center" "$snaplen" >"$file" || rc=$?
+  [[ -s $file ]] || rm -f "$file"
+  rm -f "$STATE_DIR/current.json"
+  exit "$rc"
+}
+
+cmd_open() {
+  [[ -f ${1:-} ]] || fail "no such capture: ${1:-}"
+  command -v wireshark >/dev/null || fail "Wireshark isn't installed"
+  exec uwsm-app -- wireshark "$1"
+}
+
+cmd_reveal() {
+  [[ -e ${1:-} ]] || fail "no such capture: ${1:-}"
+  exec uwsm-app -- nautilus --select "file://$1"
+}
+
+case "${1:-}" in
+  setup) shift; cmd_setup "$@" ;;
+  uninstall) shift; cmd_uninstall "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  capture) shift; cmd_capture "$@" ;;
+  stop) exec sudo -n "$HELPER" stop "${2:?iface}" ;;
+  restore) exec sudo -n "$HELPER" restore "${2:?iface}" ;;
+  open) cmd_open "${2:-}" ;;
+  reveal) cmd_reveal "${2:-}" ;;
+  *) sed -n '3,17p' "$SELF" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
