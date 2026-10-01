@@ -12,6 +12,7 @@
 #   aircap stop IFACE         stop the running capture and restore Wi-Fi
 #   aircap restore IFACE      restore Wi-Fi after a capture that didn't clean up
 #   aircap reset IFACE        reset (rebind) the Wi-Fi driver, e.g. if the radio went deaf
+#   aircap fix-fcs FILE...    mark trailing FCS in captures from drivers that don't flag it
 #   aircap open FILE          open a capture in Wireshark
 #   aircap reveal FILE        show a capture in the file manager
 #
@@ -109,7 +110,12 @@ cmd_capture() {
 
   local rc=0
   sudo -n "$HELPER" capture "$iface" "$freq" "$width" "$center" "$snaplen" "$reset" >"$file" || rc=$?
-  [[ -s $file ]] || rm -f "$file"
+  if [[ -s $file ]]; then
+    # ath12k leaves the FCS on frames without saying so in radiotap.
+    python3 "$HERE/aircap-fixfcs" "$file" >/dev/null || echo "aircap: warning=couldn't check the FCS flags in $file" >&2
+  else
+    rm -f "$file"
+  fi
   rm -f "$STATE_DIR/current.json"
   exit "$rc"
 }
@@ -133,7 +139,8 @@ case "${1:-}" in
   stop) exec sudo -n "$HELPER" stop "${2:?iface}" ;;
   restore) exec sudo -n "$HELPER" restore "${2:?iface}" ;;
   reset) exec sudo -n "$HELPER" reset "${2:?iface}" ;;
+  fix-fcs) shift; exec python3 "$HERE/aircap-fixfcs" "$@" ;;
   open) cmd_open "${2:-}" ;;
   reveal) cmd_reveal "${2:-}" ;;
-  *) sed -n '3,19p' "$SELF" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '3,20p' "$SELF" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

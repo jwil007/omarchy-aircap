@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "jwil007.aircap",
   "name": "aircap",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "author": "jwil007",
   "license": "MIT",
   "description": "Monitor-mode Wi-Fi packet captures from the bar. Pick a band, channel, and width, watch the packet count, and open the capture in Wireshark.",

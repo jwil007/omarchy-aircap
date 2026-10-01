@@ -96,6 +96,14 @@ To reset the driver by hand, for example after a capture taken with `resetDriver
 omarchy-shell jwil007.aircap resetRadio
 ```
 
+### FCS flag fix
+ath12k delivers monitor-mode frames with the 4-byte FCS still attached, but its radiotap header doesn't set the "frame includes FCS" flag. Wireshark then reads the FCS as part of the frame, and most beacons and probe responses show errors such as "Tag Length is longer than remaining payload" even though the frames are fine.
+
+After each capture, `bin/aircap-fixfcs` checks every frame: if the last 4 bytes are a valid CRC-32 of the rest of the frame and the flag isn't set, it sets the flag. Only that one bit in the radiotap header changes. Frames without a valid trailing FCS are left alone, so this does nothing on drivers that report the FCS correctly. To fix captures taken with an earlier version:
+```
+~/.config/omarchy/plugins/jwil007.aircap/bin/aircap fix-fcs ~/Captures/*.pcapng
+```
+
 ### BSSID counts
 Counts come from NetworkManager's scan list (`nmcli device wifi list`), which doesn't need root. NetworkManager drops BSSes it hasn't seen for a few minutes and rarely runs a full scan while connected, so opening the panel requests a new scan if the last one is more than 30 seconds old. The counts update a few seconds later. There is no scan data while a capture is running.
 
@@ -110,6 +118,7 @@ bin/aircap setup|uninstall
 bin/aircap status [iface] [captureDir]
 bin/aircap capture IFACE FREQ WIDTH CENTER1 SNAPLEN RESET DIR LABEL
 bin/aircap stop|restore|reset IFACE
+bin/aircap fix-fcs FILE...
 bin/aircap open|reveal FILE
 ```
 

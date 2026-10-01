@@ -280,7 +280,7 @@ Item {
     var path = file
     phase = ""
     stopping = false
-    if (_captureError.indexOf("warning=") === 0) notify("Wi-Fi reset problem", _captureError.slice(8), "normal")
+    if (_captureError.indexOf("warning=") === 0) notify("Capture warning", _captureError.slice(8), "normal")
     if (exitCode !== 0) {
       lastError = _captureError || "Capture failed (exit " + exitCode + ")"
       notify("Capture failed", lastError, "normal")
