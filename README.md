@@ -9,14 +9,12 @@ aircap is modeled on [Airtool](https://www.intuitibits.com/products/airtool/) by
 
 ## Install
 ```
-omarchy plugin add https://github.com/jwil007/omarchy-aircap.git
-omarchy plugin enable jwil007.aircap
+omarchy plugin add https://github.com/jwil007/omarchy-aircap.git --enable
 ```
-Then open the widget and click **Set up monitor-mode capture**, or run:
+The widget appears in the bar right away. The first time you open its panel, click **Set up monitor-mode capture**. This opens a terminal that installs Wireshark if it's missing and the capture helper described below, and asks for your sudo password once. You can also run setup directly:
 ```
 ~/.config/omarchy/plugins/jwil007.aircap/bin/aircap setup
 ```
-Setup opens a terminal and asks for your sudo password once.
 
 ### Dependencies
 - A Wi-Fi adapter and driver that support monitor mode (`iw list` shows `monitor` under "Supported interface modes"). Developed and tested on a Qualcomm WCN7850 (ath12k).
