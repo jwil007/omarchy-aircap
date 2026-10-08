@@ -109,6 +109,9 @@ cmd_capture() {
   echo "aircap: file=$file" >&2
 
   local rc=0
+  # The redirect is deliberately outside sudo: this shell opens the file, so
+  # the capture is owned by the user and root never writes to a user path.
+  # shellcheck disable=SC2024
   sudo -n "$HELPER" capture "$iface" "$freq" "$width" "$center" "$snaplen" "$reset" >"$file" || rc=$?
   if [[ -s $file ]]; then
     # ath12k leaves the FCS on frames without saying so in radiotap.
